@@ -6,7 +6,7 @@ import pickle
 from detectron2.engine import DefaultPredictor
 from detectron2.data.datasets import register_coco_instances
 
-from utils import *
+from .utils import *
 
 cfg_save_path = "SEG_cfg.pickle"
 
@@ -18,8 +18,8 @@ val_ds_name = "dummy_Val"
 val_images_path = "/home/ubuntu/RoomScan/CombinedDataset/TotalValImages"
 val_json_path = "/home/ubuntu/RoomScan/CombinedDataset/merege_val.json"
 
-register_coco_instances(name = train_ds_name, metadata={},
-json_file=train_json_path, image_root=train_images_path)
+# register_coco_instances(name = train_ds_name, metadata={},
+# json_file=train_json_path, image_root=train_images_path)
 
 with open(cfg_save_path, 'rb') as f:
     cfg = pickle.load(f)

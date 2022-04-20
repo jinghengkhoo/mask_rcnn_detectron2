@@ -1,3 +1,4 @@
+import json
 import os
 import random
 
@@ -8,8 +9,34 @@ from detectron2.config import get_cfg
 from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.engine import DefaultTrainer
 from detectron2.evaluation import COCOEvaluator
+from detectron2.structures import BoxMode
 from detectron2.utils.visualizer import ColorMode, Visualizer
 
+
+def instances_to_json(instances):
+    num_instance = len(instances)
+    if num_instance == 0:
+        return []
+
+    boxes = instances.pred_boxes.tensor.numpy()
+    if boxes.shape[1] == 4:
+        boxes = BoxMode.convert(boxes, BoxMode.XYXY_ABS, BoxMode.XYWH_ABS)
+    boxes = boxes.tolist()
+    scores = instances.scores.tolist()
+    classes = instances.pred_classes.tolist()
+    masks = instances.pred_masks
+    results = []
+    for k in range(num_instance):
+        result = {
+           "instance": k,
+            "category_id": classes[k],
+            "bbox": boxes[k],
+            "score": scores[k],
+            "mask": masks[k].numpy().tolist()
+        }
+
+        results.append(result)
+    return results
 
 def plot_samples(dataset_name, n = 1):
     dataset_custom = DatasetCatalog.get(dataset_name)
@@ -34,18 +61,19 @@ def get_train_cfg(cfg_file_path, checkpoint_url, train_ds_name, test_ds_name, nu
     
     cfg.DATASETS.TRAIN = (train_ds_name,)
     cfg.DATASETS.TEST = (test_ds_name,)
-    
+    cfg.DATASETS.VAL = (test_ds_name,)
+
     cfg.DATALOADER.NUM_WORKERS = num_workers
     cfg.SOLVER.IMS_PER_BATCH = 4
     
-    cfg.SOLVER.BASE_LR = 0.00025  
+    cfg.SOLVER.BASE_LR = 0.00125 
     cfg.SOLVER.MAX_ITER = iterations    
-    cfg.SOLVER.STEPS = []        # do not decay learning rate
+    cfg.SOLVER.STEPS = [1000, 2000, 3000, 3500, 4000, 4500]      # decay learning rate
     
     cfg.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 128  
     cfg.MODEL.ROI_HEADS.NUM_CLASSES = num_classes  
     
-    cfg.TEST.EVAL_PERIOD = 500
+    #cfg.TEST.EVAL_PERIOD = 50
 
     cfg.MODEL.DEVICE = device
     cfg.OUTPUT_DIR = output_dir
@@ -68,7 +96,12 @@ def predict_image(image_path, predictor, cfg=None):
     name = os.path.basename(image_path) 
     img = cv2.imread(image_path)
     outputs = predictor(img)
+    result = outputs["instances"].to("cpu")
+    result_dict = instances_to_json(result)
     
+    with open(f"./Results/new_test/{name[:-4]}.json", "w") as outfile:
+        json.dump(result_dict, outfile)
+
     if cfg:
         metadata=MetadataCatalog.get(cfg.DATASETS.TRAIN[0]).set(thing_classes=["bench", "suitcase", "tv", "refrigerator", "vase", "table", "skis", "snowboard", "skateboard", "bed",
                 "couch", "boat", "surfboard", "chair", "Canoe", "Chest of drawers", "Christmas tree", "Jet ski", "Piano",
@@ -79,14 +112,13 @@ def predict_image(image_path, predictor, cfg=None):
 
     v = Visualizer(img[:,:,::-1], metadata=metadata, 
                     scale=0.5, instance_mode=ColorMode.SEGMENTATION)
-    v = v.draw_instance_predictions(outputs["instances"].to("cpu"))
+    v = v.draw_instance_predictions(result)
 
     plt.figure(frameon=False)
     plt.imshow(v.get_image())
     plt.axis('off')
-    plt.savefig(f'./Results/{name}', dpi = 200, bbox_inches='tight', pad_inches=0)
+    plt.savefig(f'./Results/new_test/{name}', dpi = 200, bbox_inches='tight', pad_inches=0)
 
-    
 def predict_video(video_path, predictor):
     pass
     # TO Implement
@@ -96,3 +128,31 @@ def predict_video(video_path, predictor):
           "skateboard", "bed", "couch", "boat", "surfboard", "chair", 'Canoe', 'Chest of drawers',
            'Christmas tree', 'Jet ski', 'Kettle', 'Loveseat', 'Piano', 'Picture frame',
             'Punching bag', 'Sculpture', 'Sofa bed', 'Whiteboard'])"""
+
+import detectron2.utils.comm as comm
+import torch
+from detectron2.data import build_detection_train_loader
+from detectron2.engine import HookBase
+
+
+class ValidationLoss(HookBase):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg.clone()
+        self.cfg.DATASETS.TRAIN = cfg.DATASETS.VAL
+        self._loader = iter(build_detection_train_loader(self.cfg))
+        
+    def after_step(self):
+        data = next(self._loader)
+        with torch.no_grad():
+            loss_dict = self.trainer.model(data)
+            
+            losses = sum(loss_dict.values())
+            assert torch.isfinite(losses).all(), loss_dict
+
+            loss_dict_reduced = {"val_" + k: v.item() for k, v in 
+                                 comm.reduce_dict(loss_dict).items()}
+            losses_reduced = sum(loss for loss in loss_dict_reduced.values())
+            if comm.is_main_process():
+                self.trainer.storage.put_scalars(total_val_loss=losses_reduced, 
+                                                 **loss_dict_reduced)

@@ -12,10 +12,13 @@ from detectron2.engine import DefaultTrainer
 from detectron2.evaluation import COCOEvaluator, inference_on_dataset
 from detectron2.engine import DefaultPredictor
 
-from utils import get_train_cfg, plot_samples
+from utils import get_train_cfg, plot_samples, ValidationLoss
 
-config_file_path = "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
-checkpoint_url =  "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+#config_file_path = "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+#checkpoint_url =  "COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"
+
+config_file_path = "COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml"
+checkpoint_url =  "COCO-InstanceSegmentation/mask_rcnn_R_101_FPN_3x.yaml"
 
 output_dir = "./output"
 
@@ -61,6 +64,10 @@ def main():
     ## Training ##
     
     trainer = DefaultTrainer(cfg) 
+    val_loss = ValidationLoss(cfg)  
+    trainer.register_hooks([val_loss])
+    # swap the order of PeriodicWriter and ValidationLoss
+    trainer._hooks = trainer._hooks[:-2] + trainer._hooks[-2:][::-1]
     trainer.resume_or_load(resume=False)
     trainer.train()
 
@@ -70,7 +77,7 @@ def main():
     eval_cfg.MODEL.WEIGHTS = os.path.join(eval_cfg.OUTPUT_DIR, "model_final.pth")
     eval_cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5
 
-    predictor = DefaultPredictor(eval_cfg)
+    #predictor = DefaultPredictor(eval_cfg)
 
     evaluator = COCOEvaluator(val_ds_name, eval_cfg, False, output_dir="./eval/")
     val_loader = build_detection_test_loader(eval_cfg, val_ds_name)
